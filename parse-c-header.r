@@ -1,7 +1,7 @@
 REBOL[
 	Title: "Parse C header (*.h) and emit Red/Source output."
 	Author: "Boleslav Brezovsky"
-	Copyright: "(c) Boleslav Brezovsky 2012
+	Copyright: "(c) Boleslav Brezovsky 2012"
 	License: "BSD"
 	Date: "18-6-2012"
 	Version: 0.0.1
@@ -31,11 +31,13 @@ hex-to-int: func [
 	to integer! to issue! skip number 2
 ]
 
+;=== state machine
+
+var-names: copy []
+enum-values: copy []
+
 ;=== rules
 
-whitespace: charset " ^-"
-skip-whitespace: [some [" " | "^-"]]
-to-whitespace: [to #" " | to #"^-" | to #"^/"]
 chars: charset "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789"
 
 spacer: charset reduce [tab newline #" "]
@@ -44,8 +46,7 @@ any-spaces: [any spacer]
 non-space: complement spacer
 to-space: [some non-space | end]
 
-;===
-
+var-names-rule: ["dummy"]
 
 enum-rule: [
 	thru "enum"
@@ -57,7 +58,11 @@ enum-rule: [
 		spaces
 		copy value [to "," | to newline] (print ["val:" value])
 		thru newline
-		(repend enum-values [trim var hex-to-int trim value])
+		(
+			append var-names var
+			repend var-names-rule ['| var]
+			repend enum-values [var hex-to-int value]
+		)
 	]
 	thru "}"
 ]
@@ -124,12 +129,18 @@ extern-rule: [
 typedef-rule: [
 	"typedef"
 	spaces
-	struct-rule
+	[
+		struct-rule
+	|	copy def-type to-space spaces copy def-name to ";" skip
+	]
+	(
+		print ["typedef: " def-type "::" def-name]
+		repend var-names-rule ['| def-name]
+	)
 ]
 
 function-rule: [
-	["void" | "UInt32" | "UInt64" | "int" ] ; FIXME: add more types
-	; TODO: add user defined types
+	["void" | "UInt32" | "UInt64" | "int" | var-names-rule] ; FIXME: add more types
 	spaces
 	copy var-name to "(" skip
 	copy var-data to ")" skip
@@ -196,6 +207,22 @@ example-enum: {enum
 	SF_STR_GENRE					= 0x10
 } ;
 }
+
+example-func: {
+typedef int SRes;
+
+SRes SzFolder_Decode(const CSzFolder *folder, const UInt64 *packSizes,
+    ILookInStream *stream, UInt64 startPos,
+    Byte *outBuffer, size_t outSize, ISzAlloc *allocMain);
+}
+
+probe parse/all example-func [
+	any-spaces
+	typedef-rule
+	spaces
+	function-rule
+	to end
+]
 
 test-struct: [
 print "parse struct:"

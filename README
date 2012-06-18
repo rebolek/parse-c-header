@@ -1,0 +1,3 @@
+﻿Parse C header and create Red/System code
+
+This script parses C header and emits Red/System bindings. Emitters for REBOL 2 and REBOL 3 may be added later.
