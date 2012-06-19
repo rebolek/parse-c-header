@@ -5,6 +5,9 @@ REBOL[
 	License: "BSD"
 	Date: "18-6-2012"
 	Version: 0.0.1
+	To-do: [
+		"Datatype conversion"
+	]
 ]
 
 
@@ -42,6 +45,12 @@ var-names: copy []
 enum-values: copy []
 struct-values: copy []
 
+include-name:
+old-include-name: none
+includes: copy []
+
+reds-code: copy []
+import-funcs: copy []
 ;=== rules
 
 chars: charset "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789"
@@ -64,15 +73,24 @@ comment-rule: [
 define-rule: [
 	"#DEFINE" (debug #define-rule)
 	spaces
-	copy val-name to-space
+	copy const-name to-space
 	any-spaces
-	copy var-name to-space
-	(debug #define-rule_END)
+	copy const-value to-space
+	(
+		; emit define
+		repend reds-code [#define to word! const-name const-value]
+		new-line skip tail reds-code -3 true
+		
+		debug #define-rule_END
+	)
 ]
 
 enum-rule: [
 	"enum" (debug #ENUM)
-	thru "{"
+	spaces
+	copy enum-name some chars
+	spaces
+	"{"
 	(
 		enum-values: copy []
 		value: 0
@@ -89,9 +107,20 @@ enum-rule: [
 			value: value + 1	; update value from auto enum
 		)
 	]
-	thru "}"
-	thru ";"
-	(debug #ENUM_END)
+	any-spaces "}"
+	any-spaces ";"
+	(
+		debug #ENUM_END
+		print [mold enum-values]
+		enum-reds: copy []
+		foreach [name value] enum-values [
+			repend enum-reds [to set-word! to-dtype name value]
+			new-line skip tail enum-reds -2 true
+		]
+		repend reds-code [
+			#enum to set-word! to-dtype enum-name enum-reds
+		]
+	)
 ]
 
 extern-rule: [
@@ -100,6 +129,10 @@ extern-rule: [
 	copy val-type to-space
 	spaces
 	copy val-name to ";"
+	(
+		; emit extern
+		; TODO: what to emit?
+	)
 ]
 
 extern-c-begin-rule: [
@@ -107,7 +140,7 @@ extern-c-begin-rule: [
 ]
 
 extern-c-end-rule: [
-	"EXTERN_C_END"
+	"EXTERN_C_END" (debug #EXTERN_C_END)
 ]
 
 extern-rule: [
@@ -120,11 +153,54 @@ extern-rule: [
 
 
 function-rule: [
-	["void" | "UInt32" | "UInt64" | "int" | var-names-rule] ; FIXME: add more types
+;	; FIXME: add more types
+;	copy func-type ["void" | "UInt32" | "UInt64" | "int" | var-names-rule] (debug #FUNCT print func-type)
+
+	; this version works with unknown types too (be careful, it will parse everything!)
+	copy func-type some chars (
+		debug #FUNCT 
+		func-data: copy []
+	)
 	spaces
-	copy var-name to "(" skip
-	copy var-data to ")" skip
+	copy func-name some chars 
+	"("
+	some [
+		any-spaces
+		opt "const"
+		copy param-name some chars
+		spaces
+		copy param-type some ["*" | chars]
+		any-spaces
+		["," | ")"] ; FIXME: theoretically may skip past end?
+		(
+			repend func-data [
+				to word! param-name reduce [to-dtype param-type]
+			]
+			new-line skip tail func-data -2 true
+		)
+	]
 	thru ";"
+	(
+
+;	foo: "foo" [
+;            fun     [function! [a [integer!] b [integer!] return: [logic!]]]
+;            return: [integer!]
+;        ]
+
+;	]
+;	ClonePixelWand: "ClonePixelWand" [
+;		;== Makes an exact copy of the specified wand
+;		;-- PixelWand *ClonePixelWand(const PixelWand *wand)
+;		wand	[PixelWand!] ;the magick wand.
+;		return: [PixelWand!]
+;	]
+		func-params: copy []
+
+		repend import-funcs [
+			to set-word! func-name func-name func-data
+		]
+		new-line skip tail import-funcs -3 true
+	)
 ]
 
 if-defined-rule: [
@@ -144,22 +220,29 @@ if-not-defined-rule: [
 	spaces
 	copy val-name to-space
 	(debug #IFNDEF_END)
+	; TODO: add endif, create inner rule
 ]
 
 include-rule: [
 	"#include" (debug #INCLUDE)
+	(old-include-name: include-name)
 	spaces
 	copy include-name to-space
 	(
+		; TODO: move to separate function
 		replace/all include-name "<" ""
 		replace/all include-name ">" ""
 		replace/all include-name {"} ""
+		include-name: to file! include-name
+
+		append includes include-name		
 		a: ask rejoin ["Include file " include-name "? (Yes/no) "]
-		if equal? #"y" first a [
-	;		remove back tail include-name
-			include-name: to file! include-name
-			print ["Including file... " include-name]
+		either equal? #"y" first a [
+			print ["^/^/Including file... " include-name]
 			parse/all read include-name main-rule
+			print ["^/^/processed..." include-name "^/^/"]
+		][
+;			include-name: old-include-name
 		]
 	)
 ]
@@ -172,7 +255,7 @@ struct-rule: [
 ]
 
 struct-inner-rule: [
-	; TODO: clear struct values
+	(struct-values: copy [])
 	some [
 		any-spaces
 		copy val-type some chars
@@ -180,28 +263,39 @@ struct-inner-rule: [
 		copy val-name some [chars | "*"] ; can be pointer
 		any-spaces
 		thru ";"
-		(repend struct-values [val-type val-name])
+		(
+			repend struct-values [to word! val-name reduce [to-dtype val-type]]
+			new-line skip tail struct-values -2 true
+		)
 	]
 ]
 
 typedef-rule: [
-	"typedef" (debug #TYPEDEF)
+	"typedef" (
+		debug #TYPEDEF
+		struct-type?: false
+	)
 	spaces
 	[
-		"struct"
+		"struct" (struct-type?: true)
 		thru "{"
 		struct-inner-rule
 		thru "}"
-	|	copy def-type to-space spaces 
+	|	copy def-type to-space spaces
 	]
 	any-spaces
 	copy def-name some chars
 	any-spaces
 	thru ";"
 	(
-	;	print ["typedef: " def-type "::" def-name]
 		repend var-names-rule ['| def-name]
-		debug #TYPEDEF_END
+		debug [#TYPEDEF_END def-name]
+		if struct-type? [
+			repend reds-code [
+				to set-word! to-dtype def-name 'alias struct! struct-values
+			]
+			new-line skip tail reds-code -4 true
+		]
 	)
 ]
 
@@ -216,11 +310,11 @@ main-rule: [
 	|	extern-rule
 	|	extern-c-begin-rule
 	|	define-rule
-	|	function-rule
 	|	typedef-rule
 ;	|	struct-rule
 	|	enum-rule
 	|	comment-rule
+	|	function-rule	; NOTE: must be in the end as current version tries to catch unknown types (see note in function-rule)
 	|	spaces p: (print ["SPACES::" replace/all copy/part p 40 "^/" "<enter>" "::"])
 	]
 ]
@@ -325,7 +419,13 @@ test-file: %7z.h
 test-header: read test-file
 
 parse/all test-header main-rule
-
+repend reds-code [
+	; FIXME: name and decl type hardcoded for testing
+	#import reduce [
+		"library.dll" 'cdecl import-funcs
+	]
+]
+save %test.reds reds-code
 
 
 halt
