@@ -31,6 +31,11 @@ hex-to-int: func [
 	to integer! to issue! skip number 2
 ]
 
+debug?: true
+debug: func[text][
+	if debug? [print text]
+]
+
 ;=== state machine
 
 var-names: copy []
@@ -85,41 +90,62 @@ struct-rule: [
 ]
 
 comment-rule: [
-	"/*" thru "*/"
+	"/*" (debug #comment-rule)
+	thru "*/"
+	(debug #comment-rule_END)
 ]
 
 define-rule: [
-	thru #DEFINE
+	(debug #define-rule)
+	"#DEFINE"
 	spaces
 	copy val-name to-space
 	any-spaces
-	opt [copy var-name to-space]
+;	opt [copy var-name to-space]
+	(debug #define-rule_END)
+]
+
+if-def-rule: [
+	"#ifdef" (debug #IFDEF)
 ]
 
 if-not-defined-rule: [
-	thru #IFNDEV
+	"#ifndef" (debug #IFNDEF)
 	spaces
-	copy val-name
+	copy val-name to-space (debug ["val: " val-name])
 	spaces
 	define-rule
+	(debug #IFNDEF_END)
 ]
 
 include-rule: [
-	thru #INCLUDE
+	"#include" (debug #INCLUDE)
 	spaces
 	copy include-name to-space
+	(
+		replace/all include-name "<" ""
+		replace/all include-name ">" ""
+		replace/all include-name {"} ""
+		a: probe ask rejoin ["Include file " include-name "? (Yes/no) "]
+		if equal? #"y" first a [
+	;		remove back tail include-name
+			include-name: to file! include-name
+			print ["Including file... " include-name]
+			parse/all read include-name main-rule
+		]
+	)
 ]
 
 extern-c-begin-rule: [
-	thru "EXTERN_C_BEGIN"
+	"EXTERN_C_BEGIN"
 ]
 
 extern-c-end-rule: [
-	thru "EXTERN_C_END"
+	"EXTERN_C_END"
 ]
 
 extern-rule: [
-	thru "extern"
+	"extern"
 	spaces
 	copy extern-type to-space
 	spaces
@@ -146,6 +172,21 @@ function-rule: [
 	copy var-data to ")" skip
 	thru ";"
 ]
+
+; -
+
+main-rule: [
+	some [
+		if-defined-rule
+	|	if-not-defined-rule
+	|	include-rule
+;	|	struct-rule
+;	|	enum-rule
+	|	comment-rule
+	|	spaces p: (print copy/part p 40)
+	]
+]
+
 
 ; === conversion
 
@@ -216,12 +257,14 @@ SRes SzFolder_Decode(const CSzFolder *folder, const UInt64 *packSizes,
     Byte *outBuffer, size_t outSize, ISzAlloc *allocMain);
 }
 
-probe parse/all example-func [
-	any-spaces
-	typedef-rule
-	spaces
-	function-rule
-	to end
+test-func: [
+	probe parse/all example-func [
+		any-spaces
+		typedef-rule
+		spaces
+		function-rule
+		to end
+	]
 ]
 
 test-struct: [
@@ -243,13 +286,7 @@ data: probe enumblock-to-reds test! enum-values
 test-file: %7z.h
 test-header: read test-file
 
-parse test-header [
-	some [
-		comment-rule
-	|	struct-rule
-	|	enum-rule
-	]
-]
+parse/all test-header main-rule
 
 
 
