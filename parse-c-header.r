@@ -40,6 +40,7 @@ debug: func[text][
 
 var-names: copy []
 enum-values: copy []
+struct-values: copy []
 
 ;=== rules
 
@@ -53,41 +54,6 @@ to-space: [some non-space | end]
 
 var-names-rule: ["dummy"]
 
-enum-rule: [
-	thru "enum"
-	thru "{"
-	(enum-values: copy [])
-	some [
-		spaces
-		copy var to-space spaces "=" (print ["var:" var])
-		spaces
-		copy value [to "," | to newline] (print ["val:" value])
-		thru newline
-		(
-			append var-names var
-			repend var-names-rule ['| var]
-			repend enum-values [var hex-to-int value]
-		)
-	]
-	thru "}"
-]
-
-struct-rule: [
-	thru "struct" spaces copy struct-name to-space thru "{" (
-		struct-values: copy []
-	)	
-	some [
-		spaces
-		copy val-type to-space
-		spaces
-		copy val-name to-space
-		any-spaces
-		opt [copy struct-name to-space]
-		any-spaces
-		(repend struct-values [val-type val-name])
-		thru ";"
-	]
-]
 
 comment-rule: [
 	"/*" (debug #comment-rule)
@@ -96,48 +62,48 @@ comment-rule: [
 ]
 
 define-rule: [
-	(debug #define-rule)
-	"#DEFINE"
+	"#DEFINE" (debug #define-rule)
 	spaces
 	copy val-name to-space
 	any-spaces
-;	opt [copy var-name to-space]
+	copy var-name to-space
 	(debug #define-rule_END)
 ]
 
-if-def-rule: [
-	"#ifdef" (debug #IFDEF)
-]
-
-if-not-defined-rule: [
-	"#ifndef" (debug #IFNDEF)
-	spaces
-	copy val-name to-space (debug ["val: " val-name])
-	spaces
-	define-rule
-	(debug #IFNDEF_END)
-]
-
-include-rule: [
-	"#include" (debug #INCLUDE)
-	spaces
-	copy include-name to-space
+enum-rule: [
+	"enum" (debug #ENUM)
+	thru "{"
 	(
-		replace/all include-name "<" ""
-		replace/all include-name ">" ""
-		replace/all include-name {"} ""
-		a: probe ask rejoin ["Include file " include-name "? (Yes/no) "]
-		if equal? #"y" first a [
-	;		remove back tail include-name
-			include-name: to file! include-name
-			print ["Including file... " include-name]
-			parse/all read include-name main-rule
-		]
+		enum-values: copy []
+		value: 0
 	)
+	some [
+		spaces
+		copy var some chars
+		opt [any-spaces  "=" any-spaces copy value some chars (value: hex-to-int value)]	; FIXME: not all values are hex number!
+		["," | newline]	; last var is not followed by comma
+		(
+			append var-names var
+			repend var-names-rule ['| var]
+			repend enum-values [var value]
+			value: value + 1	; update value from auto enum
+		)
+	]
+	thru "}"
+	thru ";"
+	(debug #ENUM_END)
+]
+
+extern-rule: [
+	"extern" (debug #EXTERN)
+	spaces
+	copy val-type to-space
+	spaces
+	copy val-name to ";"
 ]
 
 extern-c-begin-rule: [
-	"EXTERN_C_BEGIN"
+	"EXTERN_C_BEGIN" (debug #EXTERN_C)
 ]
 
 extern-c-end-rule: [
@@ -152,18 +118,6 @@ extern-rule: [
 	copy exern-value to ";" skip
 ]
 
-typedef-rule: [
-	"typedef"
-	spaces
-	[
-		struct-rule
-	|	copy def-type to-space spaces copy def-name to ";" skip
-	]
-	(
-		print ["typedef: " def-type "::" def-name]
-		repend var-names-rule ['| def-name]
-	)
-]
 
 function-rule: [
 	["void" | "UInt32" | "UInt64" | "int" | var-names-rule] ; FIXME: add more types
@@ -173,17 +127,101 @@ function-rule: [
 	thru ";"
 ]
 
+if-defined-rule: [
+	"#ifdef" (debug #IFDEF)
+	thru ; FIXME
+	"#endif" (debug #IFDEF_END)
+]
+
+if-not-defined-rule: [
+	"#ifndef" (debug #IFNDEF)
+	spaces
+	copy val-name to-space (debug ["val: " val-name])
+	spaces
+	; TODO: redefine define rule to catch both this and self?
+	;define-rule
+	"#define"
+	spaces
+	copy val-name to-space
+	(debug #IFNDEF_END)
+]
+
+include-rule: [
+	"#include" (debug #INCLUDE)
+	spaces
+	copy include-name to-space
+	(
+		replace/all include-name "<" ""
+		replace/all include-name ">" ""
+		replace/all include-name {"} ""
+		a: ask rejoin ["Include file " include-name "? (Yes/no) "]
+		if equal? #"y" first a [
+	;		remove back tail include-name
+			include-name: to file! include-name
+			print ["Including file... " include-name]
+			parse/all read include-name main-rule
+		]
+	)
+]
+
+struct-rule: [
+	"struct" spaces copy struct-name to-space thru "{" (
+		struct-values: copy []
+	)	
+	struct-inner-rule
+]
+
+struct-inner-rule: [
+	; TODO: clear struct values
+	some [
+		any-spaces
+		copy val-type some chars
+		spaces
+		copy val-name some [chars | "*"] ; can be pointer
+		any-spaces
+		thru ";"
+		(repend struct-values [val-type val-name])
+	]
+]
+
+typedef-rule: [
+	"typedef" (debug #TYPEDEF)
+	spaces
+	[
+		"struct"
+		thru "{"
+		struct-inner-rule
+		thru "}"
+	|	copy def-type to-space spaces 
+	]
+	any-spaces
+	copy def-name some chars
+	any-spaces
+	thru ";"
+	(
+	;	print ["typedef: " def-type "::" def-name]
+		repend var-names-rule ['| def-name]
+		debug #TYPEDEF_END
+	)
+]
+
 ; -
+
 
 main-rule: [
 	some [
 		if-defined-rule
 	|	if-not-defined-rule
 	|	include-rule
+	|	extern-rule
+	|	extern-c-begin-rule
+	|	define-rule
+	|	function-rule
+	|	typedef-rule
 ;	|	struct-rule
-;	|	enum-rule
+	|	enum-rule
 	|	comment-rule
-	|	spaces p: (print copy/part p 40)
+	|	spaces p: (print ["SPACES::" replace/all copy/part p 40 "^/" "<enter>" "::"])
 	]
 ]
 
