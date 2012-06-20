@@ -108,7 +108,7 @@ enum-rule: [
 	copy enum-name some chars
 	spaces
 	"{"
-	(emit 'enum-init)
+	(init 'enum)
 	some [
 		spaces
 		copy var some chars
@@ -154,7 +154,7 @@ function-rule: [
 	; this version works with unknown types too (be careful, it will parse everything!)
 	copy func-type some chars (
 		debug #FUNCT 
-		emit 'func-init
+		init 'func
 	)
 	spaces
 	copy func-name some chars 
@@ -202,7 +202,7 @@ include-rule: [
 ]
 
 struct-rule: [
-	"struct" spaces copy struct-name to-space thru "{" (emit 'struct-init)
+	"struct" spaces copy struct-name to-space thru "{" (init 'struct)
 	struct-inner-rule
 ]
 
@@ -226,7 +226,7 @@ typedef-rule: [
 	)
 	spaces
 	[
-		"struct" (struct-type?: true emit 'struct-init)
+		"struct" (struct-type?: true init 'struct)
 		thru "{"
 		struct-inner-rule
 		thru "}"
@@ -258,7 +258,7 @@ main-rule: [
 	]
 ]
 
-;=== emitters
+;=== emitters & initters
 
 emitters: [
 	reds [
@@ -276,10 +276,6 @@ emitters: [
 			]
 			repend reds-code [#enum to-set-dtype enum-name enum-reds]
 		]
-		enum-init [
-			enum-values: copy []
-			value: 0
-		]
 		enum-values [
 			append var-names var
 			repend var-names-rule ['| var]
@@ -292,10 +288,6 @@ emitters: [
 		func [
 			repend import-funcs [to set-word! func-name func-name func-data]
 			new-line skip tail import-funcs -3 true
-		]
-		func-init [
-		;	import-funcs: copy []
-			func-data: copy []
 		]
 		func-values [
 			repend func-data [to word! param-name reduce [to-dtype param-type]]
@@ -313,9 +305,6 @@ emitters: [
 	;			include-name: old-include-name
 			]
 		]
-		struct-init [
-			struct-values: copy []
-		]
 		struct [
 			repend struct-values [to word! val-name reduce [to-dtype val-type]]
 			new-line skip tail struct-values -2 true
@@ -331,13 +320,33 @@ emitters: [
 	]
 ]
 
+initters: [
+	reds [
+		enum [
+			enum-values: copy []
+			value: 0
+		]
+		func [
+		;	import-funcs: copy []
+			func-data: copy []
+		]
+		struct [
+			struct-values: copy []
+		]
+	]
+]
+
 emit: func [
 	fn "Function name" ; FIXME> not a function, needs better name
 ][
 	do emitters/:target/:fn
 ]
 
-
+init: func [
+	fn "Function name" ; FIXME> not a function, needs better name
+][
+	do initters/:target/:fn
+]
 
 ; ==== test
 
