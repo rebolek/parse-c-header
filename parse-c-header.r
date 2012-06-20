@@ -10,13 +10,22 @@ REBOL[
 	]
 ]
 
+;=== settings
 
-; ==== support
+target: 'reds	;  Red/System . More targets will be added later
+
+;=== support
 
 to-dtype: func [
 	type
 ][
 	to word! join type "!"
+]
+
+to-set-dtype: func [
+	type
+][
+	to set-word! join type "!"
 ]
 
 hex-conv: func [
@@ -39,6 +48,22 @@ debug: func[text][
 	if debug? [print text]
 ]
 
+convert-dtype: func[
+	type
+][
+	type
+]
+
+to-filename: func [
+	name
+][
+	; convert "file" and <file> to %file
+	replace/all name "<" ""
+	replace/all name ">" ""
+	replace/all name {"} ""
+	to file! name
+]
+
 ;=== state machine
 
 var-names: copy []
@@ -51,6 +76,8 @@ includes: copy []
 
 reds-code: copy []
 import-funcs: copy []
+
+
 ;=== rules
 
 chars: charset "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789"
@@ -64,11 +91,7 @@ to-space: [some non-space | end]
 var-names-rule: ["dummy"]
 
 
-comment-rule: [
-	"/*" (debug #comment-rule)
-	thru "*/"
-	(debug #comment-rule_END)
-]
+comment-rule: ["/*" thru "*/"]
 
 define-rule: [
 	"#DEFINE" (debug #define-rule)
@@ -76,13 +99,7 @@ define-rule: [
 	copy const-name to-space
 	any-spaces
 	copy const-value to-space
-	(
-		; emit define
-		repend reds-code [#define to word! const-name const-value]
-		new-line skip tail reds-code -3 true
-		
-		debug #define-rule_END
-	)
+	(emit 'define)
 ]
 
 enum-rule: [
@@ -91,36 +108,17 @@ enum-rule: [
 	copy enum-name some chars
 	spaces
 	"{"
-	(
-		enum-values: copy []
-		value: 0
-	)
+	(emit 'enum-init)
 	some [
 		spaces
 		copy var some chars
 		opt [any-spaces  "=" any-spaces copy value some chars (value: hex-to-int value)]	; FIXME: not all values are hex number!
 		["," | newline]	; last var is not followed by comma
-		(
-			append var-names var
-			repend var-names-rule ['| var]
-			repend enum-values [var value]
-			value: value + 1	; update value from auto enum
-		)
+		(emit 'enum-values) ; FIXME: not really emit, but support function
 	]
 	any-spaces "}"
 	any-spaces ";"
-	(
-		debug #ENUM_END
-		print [mold enum-values]
-		enum-reds: copy []
-		foreach [name value] enum-values [
-			repend enum-reds [to set-word! to-dtype name value]
-			new-line skip tail enum-reds -2 true
-		]
-		repend reds-code [
-			#enum to set-word! to-dtype enum-name enum-reds
-		]
-	)
+	(emit 'enum)
 ]
 
 extern-rule: [
@@ -129,10 +127,7 @@ extern-rule: [
 	copy val-type to-space
 	spaces
 	copy val-name to ";"
-	(
-		; emit extern
-		; TODO: what to emit?
-	)
+	(emit 'extern)
 ]
 
 extern-c-begin-rule: [
@@ -159,7 +154,7 @@ function-rule: [
 	; this version works with unknown types too (be careful, it will parse everything!)
 	copy func-type some chars (
 		debug #FUNCT 
-		func-data: copy []
+		emit 'func-init
 	)
 	spaces
 	copy func-name some chars 
@@ -172,35 +167,10 @@ function-rule: [
 		copy param-type some ["*" | chars]
 		any-spaces
 		["," | ")"] ; FIXME: theoretically may skip past end?
-		(
-			repend func-data [
-				to word! param-name reduce [to-dtype param-type]
-			]
-			new-line skip tail func-data -2 true
-		)
+		(emit 'func-values)
 	]
 	thru ";"
-	(
-
-;	foo: "foo" [
-;            fun     [function! [a [integer!] b [integer!] return: [logic!]]]
-;            return: [integer!]
-;        ]
-
-;	]
-;	ClonePixelWand: "ClonePixelWand" [
-;		;== Makes an exact copy of the specified wand
-;		;-- PixelWand *ClonePixelWand(const PixelWand *wand)
-;		wand	[PixelWand!] ;the magick wand.
-;		return: [PixelWand!]
-;	]
-		func-params: copy []
-
-		repend import-funcs [
-			to set-word! func-name func-name func-data
-		]
-		new-line skip tail import-funcs -3 true
-	)
+	(emit 'func)
 ]
 
 if-defined-rule: [
@@ -212,7 +182,7 @@ if-defined-rule: [
 if-not-defined-rule: [
 	"#ifndef" (debug #IFNDEF)
 	spaces
-	copy val-name to-space (debug ["val: " val-name])
+	copy val-name to-space
 	spaces
 	; TODO: redefine define rule to catch both this and self?
 	;define-rule
@@ -228,34 +198,15 @@ include-rule: [
 	(old-include-name: include-name)
 	spaces
 	copy include-name to-space
-	(
-		; TODO: move to separate function
-		replace/all include-name "<" ""
-		replace/all include-name ">" ""
-		replace/all include-name {"} ""
-		include-name: to file! include-name
-
-		append includes include-name		
-		a: ask rejoin ["Include file " include-name "? (Yes/no) "]
-		either equal? #"y" first a [
-			print ["^/^/Including file... " include-name]
-			parse/all read include-name main-rule
-			print ["^/^/processed..." include-name "^/^/"]
-		][
-;			include-name: old-include-name
-		]
-	)
+	(emit 'include)
 ]
 
 struct-rule: [
-	"struct" spaces copy struct-name to-space thru "{" (
-		struct-values: copy []
-	)	
+	"struct" spaces copy struct-name to-space thru "{" (emit 'struct-init)
 	struct-inner-rule
 ]
 
 struct-inner-rule: [
-	(struct-values: copy [])
 	some [
 		any-spaces
 		copy val-type some chars
@@ -263,21 +214,19 @@ struct-inner-rule: [
 		copy val-name some [chars | "*"] ; can be pointer
 		any-spaces
 		thru ";"
-		(
-			repend struct-values [to word! val-name reduce [to-dtype val-type]]
-			new-line skip tail struct-values -2 true
-		)
+		(emit 'struct)
 	]
 ]
 
 typedef-rule: [
+	; TODO: struct-type? is hardcoded, make it more abstract, so there's no need for struct-type?
 	"typedef" (
 		debug #TYPEDEF
 		struct-type?: false
 	)
 	spaces
 	[
-		"struct" (struct-type?: true)
+		"struct" (struct-type?: true emit 'struct-init)
 		thru "{"
 		struct-inner-rule
 		thru "}"
@@ -287,20 +236,10 @@ typedef-rule: [
 	copy def-name some chars
 	any-spaces
 	thru ";"
-	(
-		repend var-names-rule ['| def-name]
-		debug [#TYPEDEF_END def-name]
-		if struct-type? [
-			repend reds-code [
-				to set-word! to-dtype def-name 'alias struct! struct-values
-			]
-			new-line skip tail reds-code -4 true
-		]
-	)
+	(emit 'typedef)
 ]
 
 ; -
-
 
 main-rule: [
 	some [
@@ -319,101 +258,88 @@ main-rule: [
 	]
 ]
 
+;=== emitters
 
-; === conversion
-
-enumblock-to-reds: func [
-	'name
-	block
-][
-	source: reduce [#enum name]
-	append/only source collect [
-		foreach [var val] block [keep reduce[to set-word! var val]]
-	]
-	b: source/3
-	forskip b 2 [new-line b true]
-	b: head b
-	source
-]
-
-
-struct-to-reds: func [
-	struct-name
-	struct-values
-	/local struct values
-][
-	struct: reduce [
-		to set-word! to-dtype struct-name 'alias 'struct! collect [
-			foreach [type name] struct-values [
-				keep reduce [to word! name reduce [to-dtype type]]
+emitters: [
+	reds [
+		define [
+			repend reds-code [#define to word! const-name const-value]
+			new-line skip tail reds-code -3 true
+			debug #define-rule_END
+		]
+		enum [
+			debug #ENUM_END
+			enum-reds: copy []
+			foreach [name value] enum-values [
+				repend enum-reds [to-set-dtype name value]
+				new-line skip tail enum-reds -2 true
+			]
+			repend reds-code [#enum to-set-dtype enum-name enum-reds]
+		]
+		enum-init [
+			enum-values: copy []
+			value: 0
+		]
+		enum-values [
+			append var-names var
+			repend var-names-rule ['| var]
+			repend enum-values [var value]
+			value: value + 1	; update value from auto enum
+		]
+		extern [
+			; TODO: what to emit?
+		]
+		func [
+			repend import-funcs [to set-word! func-name func-name func-data]
+			new-line skip tail import-funcs -3 true
+		]
+		func-init [
+		;	import-funcs: copy []
+			func-data: copy []
+		]
+		func-values [
+			repend func-data [to word! param-name reduce [to-dtype param-type]]
+			new-line skip tail func-data -2 true
+		]
+		include [
+			include-name: to-filename include-name
+			append includes include-name		
+			a: ask rejoin ["Include file " include-name "? (Yes/no) "] ; TODO: move to separate function
+			either equal? #"y" first a [
+				print ["^/^/Including file... " include-name]
+				parse/all read include-name main-rule
+				print ["^/^/processed..." include-name "^/^/"]
+			][
+	;			include-name: old-include-name
+			]
+		]
+		struct-init [
+			struct-values: copy []
+		]
+		struct [
+			repend struct-values [to word! val-name reduce [to-dtype val-type]]
+			new-line skip tail struct-values -2 true
+		]
+		typedef [
+			repend var-names-rule ['| def-name]
+			debug [#TYPEDEF_END def-name]
+			if struct-type? [
+				repend reds-code [to-set-dtype def-name 'alias struct! struct-values]
+				new-line skip tail reds-code -4 true
 			]
 		]
 	]
-	values: last struct
-	forskip values 2 [new-line values true]
-	values: head values
-	struct
 ]
+
+emit: func [
+	fn "Function name" ; FIXME> not a function, needs better name
+][
+	do emitters/:target/:fn
+]
+
+
 
 ; ==== test
-
-example-struct: {struct SF_INFO
-{	sf_count_t	frames ;		/* Used to be called samples.  Changed to avoid confusion. */
-	int			samplerate ;
-	int			channels ;
-	int			format ;
-	int			sections ;
-	int			seekable ;
-} ;
-}
-
-example-enum: {enum
-{	SF_STR_TITLE					= 0x01,
-	SF_STR_COPYRIGHT				= 0x02,
-	SF_STR_SOFTWARE					= 0x03,
-	SF_STR_ARTIST					= 0x04,
-	SF_STR_COMMENT					= 0x05,
-	SF_STR_DATE						= 0x06,
-	SF_STR_ALBUM					= 0x07,
-	SF_STR_LICENSE					= 0x08,
-	SF_STR_TRACKNUMBER				= 0x09,
-	SF_STR_GENRE					= 0x10
-} ;
-}
-
-example-func: {
-typedef int SRes;
-
-SRes SzFolder_Decode(const CSzFolder *folder, const UInt64 *packSizes,
-    ILookInStream *stream, UInt64 startPos,
-    Byte *outBuffer, size_t outSize, ISzAlloc *allocMain);
-}
-
-test-func: [
-	probe parse/all example-func [
-		any-spaces
-		typedef-rule
-		spaces
-		function-rule
-		to end
-	]
-]
-
-test-struct: [
-print "parse struct:"
-parse/all example-struct struct-rule
-print ["name: " struct-name newline mold struct-values]
-print mold struct-to-reds struct-name struct-values
-print newline
-]
-
-test-enum: [
-print "parse enum:"
-enum-values: copy []
-parse/all example-enum enum-rule
-print mold enum-values
-data: probe enumblock-to-reds test! enum-values
-]
 
 test-file: %7z.h
 test-header: read test-file
