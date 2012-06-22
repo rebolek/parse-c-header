@@ -6,26 +6,29 @@ REBOL[
 	Date: "18-6-2012"
 	Version: 0.0.1
 	To-do: [
-		"Datatype conversion"
+		"Fix problem with repend-line"
 	]
 ]
 
-;=== settings
+;=== settings ========================================================
 
 target: 'reds	;  Red/System . More targets will be added later
+debug?: true
 
-;=== support
+;=== support ========================================================
 
-to-dtype: func [
+convert-dtype: func[
 	type
 ][
-	to word! join type "!"
+	; TODO: support mulitple targets (when needed)
+	case [
+		find ["UInt32" "UInt64" "int"] type (integer!)
+		true (to-dtype type)
+	]
 ]
 
-to-set-dtype: func [
-	type
-][
-	to set-word! join type "!"
+debug: func[text][
+	if debug? [print text]
 ]
 
 hex-conv: func [
@@ -43,15 +46,24 @@ hex-to-int: func [
 	to integer! to issue! skip number 2
 ]
 
-debug?: true
-debug: func[text][
-	if debug? [print text]
+repend-line: func [ "Add new-line"
+	series
+	value
+][
+	repend series value
+	new-line skip tail series negate length? value true
 ]
 
-convert-dtype: func[
+to-dtype: func [
 	type
 ][
+	to word! join type "!"
+]
+
+to-set-dtype: func [
 	type
+][
+	to set-word! join type "!"
 ]
 
 to-filename: func [
@@ -64,7 +76,7 @@ to-filename: func [
 	to file! name
 ]
 
-;=== state machine
+;=== state machine ========================================================
 
 var-names: copy []
 enum-values: copy []
@@ -78,7 +90,7 @@ reds-code: copy []
 import-funcs: copy []
 
 
-;=== rules
+;=== rules ========================================================
 
 chars: charset "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789"
 
@@ -89,7 +101,6 @@ non-space: complement spacer
 to-space: [some non-space | end]
 
 var-names-rule: ["dummy"]
-
 
 comment-rule: ["/*" thru "*/"]
 
@@ -258,7 +269,7 @@ main-rule: [
 	]
 ]
 
-;=== emitters & initters
+;=== emitters & initters ========================================================
 
 emitters: [
 	reds [
@@ -286,6 +297,10 @@ emitters: [
 			; TODO: what to emit?
 		]
 		func [
+			unless equal? "void" func-type [
+				repend func-data [to set-word! 'return reduce [convert-dtype func-type]]
+				new-line skip tail func-data -2 true
+			]
 			repend import-funcs [to set-word! func-name func-name func-data]
 			new-line skip tail import-funcs -3 true
 		]
@@ -306,7 +321,7 @@ emitters: [
 			]
 		]
 		struct [
-			repend struct-values [to word! val-name reduce [to-dtype val-type]]
+			repend struct-values [to word! val-name reduce [convert-dtype val-type]]
 			new-line skip tail struct-values -2 true
 		]
 		typedef [
